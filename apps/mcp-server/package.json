@@ -1,0 +1,51 @@
+{
+  "name": "prismian-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Prismian — connect Claude, Cursor, or any MCP-compatible AI to your team's permissioned data",
+  "type": "module",
+  "author": "Prismian",
+  "homepage": "https://app.prismian.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pixelsmasher13/prismian.git",
+    "directory": "apps/mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/pixelsmasher13/prismian/issues"
+  },
+  "bin": {
+    "prismian-mcp": "./dist/index.js",
+    "prismian-mcp-sse": "./dist/sse.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "dev:sse": "tsx watch src/sse.ts",
+    "start": "node dist/index.js",
+    "start:sse": "node dist/sse.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "ai",
+    "knowledge-base",
+    "claude",
+    "cursor",
+    "team",
+    "model-context-protocol"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,227 @@
+<div align="center">
+
+<img src="docs/images/banner.svg" alt="Prismian — AI-safe access to your team's data, over MCP" width="100%"/>
+
+# Prismian
+
+Connect Postgres once. Claude, Cursor, ChatGPT, and every other
+MCP-compatible AI tool on your team gets scoped, audited, column-level
+redacted read access. No pasting schemas into chat. No shared prod passwords.
+
+[Try it free](https://app.prismian.dev) ·
+[Data handling](./DATA_HANDLING.md) ·
+[Self-host](./DEPLOY.md) ·
+[Contributing](./CONTRIBUTING.md)
+
+</div>
+
+---
+
+## What this is
+
+Prismian is an open-source **access layer** between your team's data and your AI
+tools. Connect a source once (Postgres today; Google Sheets and Notion next),
+pick the tables and columns, and every
+[MCP](https://modelcontextprotocol.io/)-compatible tool on your team can query
+them — scoped, redacted, and fully audited.
+
+No pasting schemas into chat. No shared prod passwords. One endpoint, per-agent
+keys, every read logged.
+
+## Why not just...
+
+| Alternative | Why Prismian exists |
+| --- | --- |
+| Plain Postgres MCP server | Single-user, no team layer, no column redaction, no audit, same credentials shared across tools. |
+| Supabase's / Neon's official MCP | Single vendor only, no workspace/member model, no per-agent ACLs. |
+| Notion or Confluence + MCP hack | Stores knowledge for humans. Doesn't query your Postgres. |
+| Shared `CLAUDE.md` / rules files | Works for one person, falls apart with a team. No live data. |
+| Build it yourself on Postgres + pgvector | You could — and this is what you'd build. We built it so you don't have to. |
+
+## Architecture in one diagram
+
+```
+       ┌─────────────────────┐
+       │  Your source DB     │  ← Postgres / Supabase / Neon / RDS
+       │  (read-only role)   │
+       └──────────┬──────────┘
+                  │ scheduled mirror (15 min)
+                  ▼
+       ┌─────────────────────┐        ┌─────────────────────┐
+       │  Prismian API        │◀──────▶│  Postgres + pgvector│
+       │  (Hono + Node)      │        │  (mirror + native + │
+       └───┬──────────┬──────┘        │  audit log)         │
+           │          │               └─────────────────────┘
+           │          │
+           │          │ ──── MCP (stdio / SSE) ────▶ Claude, Cursor, ChatGPT...
+           │
+           │
+           ▼
+       ┌─────────────────────┐
+       │  Web UI             │  ← members, scoped keys, data sources
+       │  (React + Vite)     │
+       └─────────────────────┘
+```
+
+Source DB is queried only at sync time. Agents always hit our mirror, which
+applies column redaction and audit before any byte leaves the API.
+
+A workspace holds two kinds of collection:
+
+- **Connected** — read-only mirrors of your source rows. Agents can't write; the
+  API rejects writes with `409 read_only_source` by construction, not policy.
+- **Native** — writable, versioned entries for decisions, notes, and insights,
+  linkable to synced rows.
+
+Every agent gets a scoped key: which collections it reads, which columns are
+redacted, result caps, and per-hour rate limits (v1.1). Every read and write
+hits the audit log.
+
+## What's in this repo
+
+| Path | What it is |
+| --- | --- |
+| `apps/api` | Hono API server — auth, routes, connectors, sync, admin cron. |
+| `apps/web` | React + Vite web app — onboarding, workspace UI, settings. |
+| `apps/mcp-server` | MCP client published as `prismian-mcp` — what each AI tool runs. |
+| `packages/shared` | Zod schemas + shared types between apps. |
+| `DEPLOY.md` | Full deployment guide (Supabase, Vercel / Railway, SMTP). |
+| `LAUNCH.md` | Pre-launch checklist: smoke test, env vars, curls to verify. |
+| `CLAUDE.md` | Architecture + conventions cheat-sheet for contributors. |
+
+## MCP tools this exposes
+
+| Tool | What it does |
+| --- | --- |
+| `list_collections` | Discover tables + column schemas. Called first in every conversation. |
+| `query_structured` | Filter rows by exact field values (eq/neq/gt/gte/lt/lte/contains/in). |
+| `aggregate` | COUNT / SUM / AVG / MIN / MAX with optional GROUP BY, HAVING, ORDER BY. |
+| `search` | Semantic + full-text over prose columns and native docs. |
+| `read_entry` | Full record for a single row or entry. |
+| `write_entry` | Create an entry in a native collection (never synced). |
+| `update_entry` | Update a native entry with optimistic-lock conflict detection. |
+| `workspace_info` | One-shot overview: name, collections, sync state, schemas. |
+
+Plus `delete_entry` and `store_document` for longer content. All 10 are
+exposed to any MCP-compatible client.
+
+## Quick start (self-host)
+
+Prereqs: Node 20+, pnpm, Docker (for local Postgres), and a Supabase
+project (free tier works) for auth + realtime.
+
+```bash
+git clone https://github.com/pixelsmasher13/prismian.git
+cd prismian
+pnpm install
+
+# Local Postgres via docker-compose
+docker compose up -d postgres
+
+# API env
+cp apps/api/.env.example apps/api/.env
+# Fill in: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL,
+#          CONNECTOR_ENCRYPTION_KEY (openssl rand -base64 32)
+
+# Web env
+cp apps/web/.env.example apps/web/.env
+# Fill in: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+
+# Migrate + run
+pnpm run db:migrate
+pnpm run dev
+```
+
+Open http://localhost:5173, register with your email, confirm, and
+follow the in-app onboarding. Full deploy instructions (Vercel + custom
+SMTP + cron) in [DEPLOY.md](./DEPLOY.md).
+
+To verify the whole stack end-to-end, run the smoke test:
+
+```bash
+cd apps/api
+pnpm run smoke
+```
+
+## MCP client — for your AI tool
+
+Any MCP-compatible tool connects with the `prismian-mcp` package. Once you
+generate an agent key in Settings → Agent Keys, paste this into your
+tool's MCP config:
+
+```jsonc
+{
+  "mcpServers": {
+    "prismian": {
+      "command": "npx",
+      "args": ["-y", "prismian-mcp"],
+      "env": {
+        "PRISMIAN_API_KEY": "pr_sk_...",
+        "PRISMIAN_WORKSPACE": "your-workspace-uuid",
+        "PRISMIAN_API_URL": "https://your-api.example.com"
+      }
+    }
+  }
+}
+```
+
+Works today with Claude Desktop, Cursor, Cline, Windsurf, and any MCP-spec
+client.
+
+## Status
+
+- **Postgres** connector — beta, covers Supabase / Neon / RDS / plain Postgres.
+- **Google Sheets**, **Notion** — next.
+- **Linear**, **Airtable**, **MySQL**, **BigQuery** — planned.
+- **Wrapping third-party MCP servers** with Prismian's identity and audit
+  layer — planned, lets you add a new source whenever a vendor ships their
+  own MCP.
+
+## Security model
+
+See [DATA_HANDLING.md](./DATA_HANDLING.md) for the full "what leaves
+your DB, what we store, what we log" writeup — this is the page
+security-minded reviewers read first. Deployment-level knobs are
+covered in [DEPLOY.md](./DEPLOY.md#security-model-quick-reference).
+Highlights:
+
+- Scoped agent keys (32-byte random, SHA-256 hashed, `pr_sk_` prefix).
+- Field-level redaction applied before data leaves the API.
+- Structural write-lock on connected collections — `POST` / `PUT` / `DELETE`
+  reject with `409 read_only_source` regardless of caller permissions.
+- Connection strings AES-256-GCM encrypted with a server-side key.
+- Every action logged to `audit_log`.
+- CORS allowlist, workspace-membership middleware on every route, cron
+  secret with constant-time comparison.
+- Postgres Row Level Security as defense-in-depth.
+
+Not yet in v1: MFA UI, SSO / SAML, SOC 2. Targets for v1.2+.
+
+## Contributing
+
+PRs welcome — especially new connectors. See
+[CONTRIBUTING.md](./CONTRIBUTING.md).
+
+Good first issues:
+
+- A Google Sheets connector (Postgres connector is the template).
+- Entry history MCP tool (`entry_history(entry_id)`) exposing the existing
+  `entry_versions` table.
+- Per-key read rate limiting (write-rate limiting already works; clone the
+  pattern).
+- Resend-invite and copy-invite-link buttons in Settings → Members.
+
+## Hosted
+
+Prismian runs as a hosted app at
+[app.prismian.dev](https://app.prismian.dev) — free while in private beta
+with a small group of design partners. Sign up, connect your Postgres,
+generate a scoped agent key, and paste the config into Cursor or
+Claude. That's the install.
+
+If you'd rather run it yourself, [DEPLOY.md](./DEPLOY.md) walks you
+through it — same codebase, same migrations, same MCP server.
+
+## License
+
+Apache 2.0. See [LICENSE](./LICENSE).

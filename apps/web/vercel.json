@@ -1,0 +1,8 @@
+{
+  "framework": "vite",
+  "buildCommand": "cd ../.. && pnpm run build --filter=@prismian/web",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

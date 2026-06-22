@@ -1,0 +1,23 @@
+{
+  "builds": [
+    {
+      "src": "src/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "maxDuration": 800
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "src/index.ts"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/admin/sync-due",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}
